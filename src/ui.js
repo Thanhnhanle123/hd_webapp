@@ -1,4 +1,4 @@
-import { getContractFileCode, productIcons, statusLabels } from "./contracts.js";
+import { getContractFileCode, isFinalizedContract, productIcons, statusLabels } from "./contracts.js";
 
 const icons = {
   home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/><path d="M9 21v-7h6v7"/>',
@@ -52,11 +52,31 @@ export function hydrateIcons(root = document) {
   });
 }
 
-function contractRow(contract, syncingContracts) {
+function formatSyncElapsed(startedAt) {
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  const parts = [minutes, seconds];
+  if (hours) parts.unshift(hours);
+  return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+export function updateSyncElapsedTimers() {
+  document.querySelectorAll("[data-sync-elapsed]").forEach((element) => {
+    const startedAt = Number(element.dataset.syncStartedAt);
+    if (Number.isFinite(startedAt)) element.textContent = formatSyncElapsed(startedAt);
+  });
+}
+
+function contractRow(contract, syncingContracts, syncStartedAt) {
   const id = escapeHtml(contract.id);
   const number = escapeHtml(contract.number);
   const isSyncing = Boolean(contract.number && syncingContracts.has(contract.number));
+  const isFinalized = isFinalizedContract(contract);
+  const syncStarted = isSyncing ? syncStartedAt.get(contract.number) : 0;
   const hasContractNumber = Boolean(contract.number);
+  const syncTitle = isFinalized ? "Không cần đồng bộ" : "Đồng bộ trạng thái";
   return `<tr>
     <td class="contract-id">${number || id}</td>
     <td class="customer-name"><button class="customer-link" type="button" data-contract-id="${id}" ${hasContractNumber ? "" : "disabled"}>${escapeHtml(contract.customer)}</button></td>
@@ -64,14 +84,40 @@ function contractRow(contract, syncingContracts) {
     <td><span class="status-pill status-${escapeHtml(contract.status)}">${escapeHtml(contract.statusLabel || statusLabels[contract.status] || "Chưa xác định")}</span></td>
     <td>${escapeHtml(contract.created)}</td>
     <td><div class="contract-actions">
-      <button class="row-action sync-action${isSyncing ? " is-syncing" : ""}" type="button" data-sync-contract="${number}" aria-label="${isSyncing ? "Đang đồng bộ" : "Đồng bộ"} ${number || id}" title="Đồng bộ trạng thái" ${isSyncing || !hasContractNumber ? "disabled" : ""}><span data-icon="sync"></span></button>
+      <button class="row-action sync-action${isSyncing ? " is-syncing" : ""}" type="button" data-sync-contract="${number}" aria-label="${isFinalized ? "Không cần đồng bộ" : isSyncing ? "Đang đồng bộ" : "Đồng bộ"} ${number || id}" title="${syncTitle}" ${isSyncing || isFinalized || !hasContractNumber ? "disabled" : ""}><span data-icon="sync"></span></button>
+      ${isSyncing && syncStarted ? `<span class="sync-elapsed" data-sync-elapsed data-sync-started-at="${syncStarted}" role="timer" aria-label="Thời gian đang đồng bộ">${formatSyncElapsed(syncStarted)}</span>` : ""}
       <button class="row-action" type="button" data-contract-id="${id}" aria-label="Xem ${number || id}" ${hasContractNumber ? "" : "disabled"}><span data-icon="arrow"></span></button>
     </div></td>
   </tr>`;
 }
 
-export function renderContractRows(contracts, syncingContracts) {
-  return contracts.map((contract) => contractRow(contract, syncingContracts)).join("");
+export function renderContractRows(contracts, syncingContracts, syncStartedAt) {
+  return contracts.map((contract) => contractRow(contract, syncingContracts, syncStartedAt)).join("");
+}
+
+function getVisiblePages(currentPage, totalPages) {
+  if (totalPages <= 5) return Array.from({ length: totalPages }, (_, index) => index);
+  const pages = new Set([0, totalPages - 1]);
+  for (let page = Math.max(0, currentPage - 1); page <= Math.min(totalPages - 1, currentPage + 1); page += 1) {
+    pages.add(page);
+  }
+  return [...pages].sort((first, second) => first - second);
+}
+
+function renderPagination(currentPage, totalPages) {
+  const visiblePages = getVisiblePages(currentPage, totalPages);
+  const buttons = [];
+  let previousPage = -1;
+
+  for (const page of visiblePages) {
+    if (page - previousPage > 1) {
+      buttons.push('<span class="pagination-ellipsis" aria-hidden="true">…</span>');
+    }
+    buttons.push(`<button class="page-number${page === currentPage ? " active" : ""}" type="button" data-page-number="${page}" aria-label="Trang ${page + 1}"${page === currentPage ? ' aria-current="page"' : ""}>${page + 1}</button>`);
+    previousPage = page;
+  }
+
+  return `<button class="page-button" type="button" data-page-step="-1" aria-label="Trang trước"${currentPage === 0 ? " disabled" : ""}><span aria-hidden="true">‹</span></button>${buttons.join("")}<button class="page-button" type="button" data-page-step="1" aria-label="Trang sau"${currentPage >= totalPages - 1 ? " disabled" : ""}><span aria-hidden="true">›</span></button>`;
 }
 
 export function renderStats(statistics, contractCount) {
@@ -100,20 +146,21 @@ export function renderContractList({
   selectedStatus,
   loadError,
   syncingContracts,
+  syncStartedAt,
   syncMessage
 }) {
-  document.getElementById("recentContracts").innerHTML = renderContractRows(contracts.slice(0, 5), syncingContracts);
+  document.getElementById("recentContracts").innerHTML = renderContractRows(contracts.slice(0, 5), syncingContracts, syncStartedAt);
   const normalizedQuery = query.trim().toLocaleLowerCase("vi");
   const filtered = contracts.filter((item) => {
     const matchesQuery = !normalizedQuery || `${item.number} ${item.id} ${item.customer} ${item.product}`.toLocaleLowerCase("vi").includes(normalizedQuery);
     return matchesQuery && (selectedStatus === "all" || item.status === selectedStatus);
   });
-  document.getElementById("allContracts").innerHTML = renderContractRows(filtered, syncingContracts);
+  document.getElementById("allContracts").innerHTML = renderContractRows(filtered, syncingContracts, syncStartedAt);
   document.getElementById("allCount").textContent = String(totalElements);
   document.getElementById("navContractCount").textContent = String(totalElements);
   const firstItem = totalElements === 0 ? 0 : page * pageSize + 1;
   const lastItem = Math.min((page + 1) * pageSize, totalElements);
-  document.getElementById("resultCount").textContent = `Hiển thị ${firstItem}–${lastItem} trên ${totalElements} hợp đồng`;
+  document.getElementById("resultCount").textContent = `Đang xem ${firstItem}–${lastItem} / ${totalElements} hồ sơ`;
   document.getElementById("emptyState").hidden = filtered.length > 0 || Boolean(loadError);
   document.getElementById("emptyStateMessage").textContent = totalElements === 0 && !query.trim()
     ? "Chưa có hợp đồng nào được tạo cho tài khoản này."
@@ -126,9 +173,7 @@ export function renderContractList({
   const syncElement = document.getElementById("contractSyncNotice");
   syncElement.textContent = syncMessage;
   syncElement.hidden = !syncMessage;
-  document.getElementById("previousPage").disabled = page === 0;
-  document.getElementById("nextPage").disabled = page >= totalPages - 1;
-  document.getElementById("currentPage").textContent = String(page + 1);
+  document.getElementById("paginationControls").innerHTML = renderPagination(page, totalPages);
   hydrateIcons(document.getElementById("recentContracts"));
   hydrateIcons(document.getElementById("allContracts"));
 }

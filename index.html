@@ -204,7 +204,10 @@
                 <span data-icon="find"></span><strong>Không tìm thấy hợp đồng</strong>
                 <p id="emptyStateMessage">Thử thay đổi từ khóa hoặc bộ lọc để xem kết quả.</p>
               </div>
-              <div class="pagination"><span id="resultCount"></span><div><button class="page-button" id="previousPage" aria-label="Trang trước" disabled>‹</button><button class="page-number active" id="currentPage">1</button><button class="page-button" id="nextPage" aria-label="Trang sau" disabled>›</button></div></div>
+              <div class="pagination">
+                <span class="pagination-summary" id="resultCount"></span>
+                <nav class="pagination-controls" id="paginationControls" aria-label="Phân trang"></nav>
+              </div>
             </section>
             <div class="demo-note"><span data-icon="info"></span> Danh sách được tải từ API hợp đồng theo tài khoản đang đăng nhập.</div>
           </section>

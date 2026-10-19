@@ -11,8 +11,8 @@ import {
   signIn,
   synchronizeContractStatus
 } from "./api.js";
-import { demoContracts, extractContractDetails, extractContractPage, isPendingApprovalContract, statusLabels } from "./contracts.js";
-import { hydrateIcons, renderContractDetailTabs, renderContractDetails, renderContractList, renderStats } from "./ui.js";
+import { demoContracts, extractContractDetails, extractContractPage, isFinalizedContract, isPendingApprovalContract, statusLabels } from "./contracts.js";
+import { hydrateIcons, renderContractDetailTabs, renderContractDetails, renderContractList, renderStats, updateSyncElapsedTimers } from "./ui.js";
 
 const AUTH_STORAGE_KEY = "hdsaison.portal.session";
 const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
@@ -35,6 +35,7 @@ let authSession = null;
 let dashboardStatistics = null;
 let expirationTimer;
 let autoSyncTimer;
+let syncElapsedTimer;
 let toastTimer;
 let contractPage = 0;
 let contractTotalElements = contracts.length;
@@ -52,6 +53,7 @@ let contractSyncMessage = "";
 let contractsRequested = false;
 let autoSyncRunning = false;
 const syncingContracts = new Set();
+const syncStartedAt = new Map();
 
 function renderContractView() {
   renderContractList({
@@ -64,8 +66,30 @@ function renderContractView() {
     selectedStatus: statusFilter.value,
     loadError: contractLoadError,
     syncingContracts,
+    syncStartedAt,
     syncMessage: contractSyncMessage
   });
+}
+
+function startContractSyncTimer() {
+  if (!syncElapsedTimer) {
+    syncElapsedTimer = window.setInterval(updateSyncElapsedTimers, 1000);
+  }
+}
+
+function markContractSyncStarted(contractNumber) {
+  syncingContracts.add(contractNumber);
+  syncStartedAt.set(contractNumber, Date.now());
+  startContractSyncTimer();
+}
+
+function markContractSyncFinished(contractNumber) {
+  syncingContracts.delete(contractNumber);
+  syncStartedAt.delete(contractNumber);
+  if (syncStartedAt.size === 0) {
+    window.clearInterval(syncElapsedTimer);
+    syncElapsedTimer = undefined;
+  }
 }
 
 function setAccountDetails(user) {
@@ -138,6 +162,9 @@ function endSession(message) {
   dashboardStatistics = null;
   contractsRequested = false;
   syncingContracts.clear();
+  syncStartedAt.clear();
+  window.clearInterval(syncElapsedTimer);
+  syncElapsedTimer = undefined;
   contractSyncMessage = "";
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   document.getElementById("appShell").hidden = true;
@@ -397,7 +424,7 @@ async function runAutoSync() {
     for (const contractNumber of contractNumbers) {
       if (authSession !== session || document.hidden) break;
       if (syncingContracts.has(contractNumber)) continue;
-      syncingContracts.add(contractNumber);
+      markContractSyncStarted(contractNumber);
       renderContractView();
       try {
         await synchronizeContractStatus(session, contractNumber);
@@ -409,7 +436,7 @@ async function runAutoSync() {
         }
         failures.push(`${contractNumber}: ${getErrorMessage(error)}`);
       } finally {
-        syncingContracts.delete(contractNumber);
+        markContractSyncFinished(contractNumber);
         if (authSession === session) renderContractView();
       }
     }
@@ -438,8 +465,9 @@ async function runAutoSync() {
 
 async function syncContractManually(contractNumber) {
   const session = authSession;
-  if (!session || syncingContracts.has(contractNumber)) return;
-  syncingContracts.add(contractNumber);
+  const contract = contracts.find((item) => item.number === contractNumber);
+  if (!session || syncingContracts.has(contractNumber) || isFinalizedContract(contract)) return;
+  markContractSyncStarted(contractNumber);
   contractSyncMessage = "";
   renderContractView();
   try {
@@ -465,7 +493,7 @@ async function syncContractManually(contractNumber) {
       showToast(`Không đồng bộ được ${contractNumber}.`);
     }
   } finally {
-    syncingContracts.delete(contractNumber);
+    markContractSyncFinished(contractNumber);
     if (authSession === session) renderContractView();
   }
 }
@@ -665,11 +693,15 @@ searchInput.addEventListener("input", () => {
     loadContractsPage(0).catch(() => {});
   }, 350);
 });
-document.getElementById("previousPage").addEventListener("click", () => {
-  if (contractPage > 0) loadContractsPage(contractPage - 1).catch(() => {});
-});
-document.getElementById("nextPage").addEventListener("click", () => {
-  if (contractPage < contractTotalPages - 1) loadContractsPage(contractPage + 1).catch(() => {});
+document.getElementById("paginationControls").addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target.closest("[data-page-number], [data-page-step]") : null;
+  if (!target || target.disabled) return;
+  const page = target.dataset.pageNumber != null
+    ? Number(target.dataset.pageNumber)
+    : contractPage + Number(target.dataset.pageStep);
+  if (Number.isInteger(page) && page >= 0 && page < contractTotalPages && page !== contractPage) {
+    loadContractsPage(page).catch(() => {});
+  }
 });
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {

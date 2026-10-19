@@ -7,8 +7,8 @@ export const statusLabels = {
   rejected: "Từ chối"
 };
 
-export function isPendingApprovalContract(contract) {
-  const status = String(contract?.statusLabel || "")
+function normalizeStatusText(value) {
+  return String(value || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[Đđ]/g, "d")
@@ -16,6 +16,18 @@ export function isPendingApprovalContract(contract) {
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function isFinalizedContract(contract) {
+  const status = String(contract?.status || "").toLocaleLowerCase("en");
+  if (status === "approved" || status === "rejected") return true;
+  const statusLabel = normalizeStatusText(contract?.statusLabel);
+  return /reject|declin|tu choi/.test(statusLabel)
+    || /^(?:approve(?:d)?|approve(?:d)?\s+.*|da\s+phe\s+duyet(?:\s+.*)?|phe\s+duyet(?:\s+.*)?)$/.test(statusLabel);
+}
+
+export function isPendingApprovalContract(contract) {
+  const status = normalizeStatusText(contract?.statusLabel);
   return /(?:cho(?:\s+khach)?|pending|waiting|wait)\s+(?:phe\s+duyet|duyet|approval|approve)|(?:phe\s+duyet|duyet|approval|approve)\s+(?:dang\s+)?(?:cho|pending|waiting|wait)/.test(status);
 }
 
